@@ -253,3 +253,43 @@ class LLaVATrainer(Trainer):
             pass
         else:
             super(LLaVATrainer, self)._save(output_dir, state_dict)
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        rag_enabled = getattr(model, 'config', None)
+        rag_enabled = getattr(rag_enabled, 'use_rag_score', False)
+
+        images = inputs.get('images', None)
+        if rag_enabled and images is not None:
+            input_ids = inputs['input_ids']
+            attention_mask = inputs.get('attention_mask', None)
+            labels = inputs.get('labels', None)
+            image_sizes = inputs.get('image_sizes', None)
+
+            rag_outputs = model.run_rag_layer_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                images=images,
+                image_sizes=image_sizes,
+                top_k=getattr(model.config, 'rag_top_k', None),
+                temperature=getattr(model.config, 'rag_temperature', 1.0),
+            )
+
+            loss = rag_outputs.get('loss')
+            if loss is None:
+                # Fallback to standard loss computation if labels are absent.
+                return super().compute_loss(model, inputs, return_outputs)
+
+            if return_outputs:
+                layer_logits = rag_outputs['layer_logits']  # [B, K, T, V]
+                layer_weights = rag_outputs['layer_weights']  # [B, K]
+                weights = layer_weights.unsqueeze(-1).unsqueeze(-1).to(layer_logits.dtype)
+                aggregated_logits = (layer_logits * weights).sum(dim=1)
+                outputs = {
+                    'logits': aggregated_logits,
+                    'rag_outputs': rag_outputs,
+                }
+                return loss, outputs
+            return loss
+
+        return super().compute_loss(model, inputs, return_outputs)

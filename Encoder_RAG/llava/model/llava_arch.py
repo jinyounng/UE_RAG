@@ -14,13 +14,14 @@
 
 
 from abc import ABC, abstractmethod
+from typing import Optional
 
 import torch
 import torch.nn as nn
 
 from .multimodal_encoder.builder import build_vision_tower
 from .multimodal_projector.builder import build_vision_projector
-from .rag_modules import build_vision_rag_scorer
+from .rag_modules import build_vision_rag_scorer, compute_topk_vision_outputs
 
 from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 
@@ -52,6 +53,39 @@ class LlavaMetaModel:
         if type(module) is list:
             module = module[0]
         return module
+
+    def compute_rag_topk(
+        self,
+        query: torch.Tensor,
+        top_k: int,
+        temperature: float = 1.0,
+        use_projector: bool = True,
+        return_scores: bool = False,
+    ):
+        """Run RAG layer selection using cached vision hidden states."""
+
+        vision_tower = self.get_vision_tower()
+        rag_scorer = self.get_rag_score_module()
+        if vision_tower is None:
+            raise ValueError("Vision tower must be initialized before calling compute_rag_topk")
+        if rag_scorer is None:
+            raise ValueError("RAG score module is not attached to the model")
+
+        hidden_states = vision_tower.get_cached_hidden_states()
+        if hidden_states is None:
+            raise ValueError("Vision hidden states cache is empty. Run the vision tower forward first.")
+
+        projector = self.mm_projector if use_projector else None
+
+        return compute_topk_vision_outputs(
+            hidden_states=hidden_states,
+            rag_scorer=rag_scorer,
+            query=query,
+            top_k=top_k,
+            temperature=temperature,
+            projector=projector,
+            return_scores=return_scores,
+        )
 
     def initialize_vision_modules(self, model_args, fsdp=None):
         vision_tower = model_args.vision_tower
@@ -101,7 +135,7 @@ class LlavaMetaModel:
             language_hidden_size = getattr(self.config.text_config, 'hidden_size', None)
 
         if language_hidden_size is not None:
-            rag_pool_mode = getattr(model_args, 'rag_pool_mode', 'mean')
+            rag_pool_mode = getattr(model_args, 'rag_pool_mode', 'cls_first')
             existing = getattr(self, 'visual_rag_score', None)
             if existing is None or \
                existing.proj.in_features != vision_tower.hidden_size or \
@@ -119,8 +153,13 @@ class LlavaMetaModel:
             ref_param = next(self.parameters())
             self.visual_rag_score.to(device=ref_param.device, dtype=ref_param.dtype)
             self.config.use_rag_score = True
+            self.config.rag_pool_mode = rag_pool_mode
         else:
             self.config.use_rag_score = False
+            self.config.rag_pool_mode = None
+
+        self.config.rag_top_k = getattr(model_args, 'rag_top_k', getattr(self.config, 'rag_top_k', None))
+        self.config.rag_temperature = getattr(model_args, 'rag_temperature', getattr(self.config, 'rag_temperature', 1.0))
 
         if pretrain_mm_mlp_adapter is not None:
             mm_projector_weights = torch.load(pretrain_mm_mlp_adapter, map_location='cpu')
@@ -174,6 +213,154 @@ class LlavaMetaForCausalLM(ABC):
         image_features = self.get_model().get_vision_tower()(images)
         image_features = self.get_model().mm_projector(image_features)
         return image_features
+
+    def compute_rag_selection(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor],
+        images,
+        top_k: Optional[int] = None,
+        temperature: Optional[float] = None,
+        use_projector: bool = True,
+        return_scores: bool = False,
+    ):
+        """Convenience wrapper for RAG layer selection given input ids and images."""
+
+        model = self.get_model()
+        vision_tower = model.get_vision_tower()
+        if vision_tower is None:
+            raise ValueError("Vision tower is not initialized")
+        if images is None:
+            raise ValueError("Images must be provided for RAG selection")
+        if not getattr(self.config, 'use_rag_score', False):
+            raise ValueError("RAG score module is not enabled on this model")
+
+        _ = vision_tower(images)
+
+        token_embeds = model.embed_tokens(input_ids)
+
+        if attention_mask is not None:
+            mask = attention_mask.float()
+        else:
+            mask = torch.ones_like(input_ids, dtype=torch.float)
+        image_mask = (input_ids != IMAGE_TOKEN_INDEX).float()
+        mask = mask * image_mask
+        mask = mask.to(dtype=token_embeds.dtype)
+        denom = mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        query = (token_embeds * mask.unsqueeze(-1)).sum(dim=1) / denom
+
+        if top_k is None:
+            top_k = getattr(self.config, 'rag_top_k', None)
+            if top_k is None:
+                raise ValueError("top_k must be provided when config.rag_top_k is not set")
+
+        if temperature is None:
+            temperature = getattr(self.config, 'rag_temperature', 1.0)
+
+        rag_outputs = model.compute_rag_topk(
+            query=query,
+            top_k=top_k,
+            temperature=temperature,
+            use_projector=use_projector,
+            return_scores=return_scores,
+        )
+
+        if rag_outputs.get('projected_hidden_states') is None:
+            selected_hidden = rag_outputs['selected_hidden_states']
+            B, K, T, D = selected_hidden.shape
+            flat = selected_hidden.reshape(B * K * T, D)
+            projected_flat = model.mm_projector(flat)
+            rag_outputs['projected_hidden_states'] = projected_flat.view(B, K, T, -1)
+
+        self.latest_rag_outputs = rag_outputs
+
+        return rag_outputs
+
+    def run_rag_layer_forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor],
+        labels: Optional[torch.LongTensor],
+        images,
+        image_sizes=None,
+        top_k: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ):
+        """Project top-k vision layers and run the language model per layer."""
+
+        rag_outputs = self.compute_rag_selection(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            images=images,
+            top_k=top_k,
+            temperature=temperature,
+            use_projector=True,
+            return_scores=True,
+        )
+
+        projected = rag_outputs['projected_hidden_states']  # [B, K, T, H]
+        layer_weights = rag_outputs['layer_weights']        # [B, K]
+
+        B, K, vision_len, hidden_dim = projected.shape
+        device = input_ids.device
+
+        model = self.get_model()
+        token_embeds = model.embed_tokens(input_ids)
+
+        per_layer_logits = []
+        per_layer_logliks = []
+
+        if attention_mask is not None:
+            base_attention = attention_mask
+        else:
+            base_attention = torch.ones(input_ids.shape, dtype=torch.long, device=device)
+
+        base_attention = base_attention.to(device=device)
+
+        for k_idx in range(K):
+            layer_tokens = projected[:, k_idx, :, :].to(device=token_embeds.device, dtype=token_embeds.dtype)
+            combined_embeddings = torch.cat([layer_tokens, token_embeds], dim=1)
+
+            vision_attn = torch.ones(B, vision_len, dtype=base_attention.dtype, device=device)
+            combined_attention_mask = torch.cat([vision_attn, base_attention], dim=1)
+            layer_output = self(
+                inputs_embeds=combined_embeddings,
+                attention_mask=combined_attention_mask,
+                images=None,
+                image_sizes=image_sizes,
+                use_cache=False,
+                return_dict=True,
+            )
+
+            layer_logits = layer_output.logits[:, vision_len:, :]
+            per_layer_logits.append(layer_logits.unsqueeze(1))
+
+            if labels is not None:
+                shifted_logits = layer_logits[:, :-1, :]
+                target = labels[:, 1:]
+                valid = target != IGNORE_INDEX
+                log_probs = torch.log_softmax(shifted_logits, dim=-1)
+                gathered = log_probs.gather(dim=-1, index=target.clamp_min(0).unsqueeze(-1)).squeeze(-1)
+                gathered = gathered.masked_fill(~valid, 0.0)
+                seq_loglik = gathered.sum(dim=-1)
+                per_layer_logliks.append(seq_loglik)
+
+        rag_outputs['layer_logits'] = torch.cat(per_layer_logits, dim=1)
+        rag_outputs['layer_weights'] = layer_weights
+
+        if labels is not None and per_layer_logliks:
+            layer_logliks = torch.stack(per_layer_logliks, dim=1)
+            log_weights = torch.log(layer_weights.clamp_min(1e-8))
+            log_marginal = torch.logsumexp(layer_logliks + log_weights, dim=1)
+            rag_outputs['layer_logliks'] = layer_logliks
+            rag_outputs['log_marginal'] = log_marginal
+            rag_outputs['loss'] = (-log_marginal).mean()
+        else:
+            rag_outputs['layer_logliks'] = None
+            rag_outputs['log_marginal'] = None
+            rag_outputs['loss'] = None
+
+        return rag_outputs
 
     def prepare_inputs_labels_for_multimodal(
         self, input_ids, position_ids, attention_mask, past_key_values, labels,

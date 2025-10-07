@@ -8,7 +8,7 @@ import torch.nn.functional as F
 class VisionRAGScoreAdapter(nn.Module):
     """Projects per-layer vision hidden states into the language model space for RAG."""
 
-    def __init__(self, input_dim: int, output_dim: int, select_feature: str = 'patch', pool_mode: str = 'mean'):
+    def __init__(self, input_dim: int, output_dim: int, select_feature: str = 'patch', pool_mode: str = 'cls_first'):
         super().__init__()
         self.select_feature = select_feature
         self.pool_mode = pool_mode
@@ -55,6 +55,8 @@ class VisionRAGScoreAdapter(nn.Module):
 
     def _select_tokens(self, layer_tensor: torch.Tensor) -> torch.Tensor:
         if self.select_feature == 'patch':
+            if self.pool_mode == 'cls_first':
+                return layer_tensor
             if layer_tensor.size(1) > 1:
                 return layer_tensor[:, 1:]
             return layer_tensor
@@ -72,7 +74,7 @@ class VisionRAGScoreAdapter(nn.Module):
         raise ValueError(f"Unsupported pool_mode: {self.pool_mode}")
 
 
-def build_vision_rag_scorer(vision_hidden_size: int, language_hidden_size: int, select_feature: str = 'patch', pool_mode: str = 'mean'):
+def build_vision_rag_scorer(vision_hidden_size: int, language_hidden_size: int, select_feature: str = 'patch', pool_mode: str = 'cls_first'):
     """Factory helper that mirrors other vision modules."""
     return VisionRAGScoreAdapter(
         input_dim=vision_hidden_size,
