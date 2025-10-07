@@ -1,0 +1,58 @@
+### model
+model_name_or_path: Qwen/Qwen2.5-VL-3B-Instruct
+image_max_pixels: 262144
+video_max_pixels: 16384
+trust_remote_code: true
+enable_rag: true
+rag_top_k: 3
+rag_dim: 2048  # Qwen2.5-VL-3B의 실제 hidden size
+rag_training_mode: rag_only  # RAG 모듈만 훈련
+rag_layer_selection_mode: concat_last_layer  # 새로운 concat 모드 사용
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+freeze_vision_tower: true
+freeze_multi_modal_projector: true
+freeze_language_model: true  # LM은 동결 (RAG만 훈련)
+deepspeed: examples/deepspeed/ds_z2_config.json
+
+### dataset
+dataset: llava_pretrain,llava_instruct
+template: qwen2_vl
+cutoff_len: 1024
+max_samples: 100000  
+overwrite_cache: true
+preprocessing_num_workers: 8
+dataloader_num_workers: 8
+dataset_dir: /data3/jykim/Projects/VLM/LLaMA-Factory
+
+### output
+output_dir: saves/qwen2_5vl-3b/rag_concat_test
+logging_steps: 100
+save_steps: 1000
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+disable_tqdm: false  # Enable tqdm progress bar
+
+### train
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-3
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
+
+gradient_checkpointing: false
+
+### eval
+# val_size: 0.1
+# per_device_eval_batch_size: 1
+# eval_strategy: steps
+# eval_steps: 500

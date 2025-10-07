@@ -1,0 +1,25 @@
+### model
+model_name_or_path: saves/qwen2_5vl-3b/rag/sft
+image_max_pixels: 262144
+video_max_pixels: 16384
+trust_remote_code: true
+enable_rag: true
+rag_top_k: 5
+rag_dim: 3072
+
+### method
+finetuning_type: full
+
+### dataset  
+dataset: llava_pretrain
+dataset_dir: /data3/DB/dataset/LLaVA-Pretrain
+task: llava_pretrain_eval
+template: fewshot
+lang: en
+n_shot: 0  # zero-shot 평가
+
+### output
+save_dir: saves/qwen2_5vl-3b/rag/eval
+
+### eval
+batch_size: 1

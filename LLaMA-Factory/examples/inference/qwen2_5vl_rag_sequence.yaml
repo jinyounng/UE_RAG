@@ -1,0 +1,19 @@
+### model
+model_name_or_path: /data3/jykim/Projects/VLM/LLaMA-Factory/saves/qwen2_5vl-3b/rag_sequence_top3/checkpoint-6000
+template: qwen2_vl
+infer_backend: huggingface  # choices: [huggingface, vllm, sglang]
+trust_remote_code: true
+
+### RAG settings
+enable_rag: true
+rag_top_k: 3
+rag_dim: 2048
+rag_training_mode: auto  # 훈련된 모델의 설정과 일치해야 함
+
+### generation
+temperature: 0.7
+top_p: 0.8
+top_k: 50
+max_new_tokens: 512
+repetition_penalty: 1.05
+do_sample: true

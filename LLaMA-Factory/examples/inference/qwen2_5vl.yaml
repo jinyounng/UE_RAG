@@ -1,0 +1,4 @@
+model_name_or_path: /data3/jykim/Projects/VLM/LLaMA-Factory/saves/qwen2_5vl-3b/rag/sft/checkpoint-1125
+template: qwen2_vl
+infer_backend: huggingface  # choices: [huggingface, vllm, sglang]
+trust_remote_code: true

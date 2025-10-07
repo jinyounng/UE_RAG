@@ -1,0 +1,32 @@
+{
+  "llava_pretrain": {
+    "file_name": "/data3/DB/dataset/LLaVA-Pretrain/llava_pretrain_llamafactory.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "messages",
+      "images": "images"
+    },
+    "tags": {
+      "role_tag": "role",
+      "content_tag": "content",
+      "user_tag": "user",
+      "assistant_tag": "assistant"
+    },
+    "media_dir": "/data3/DB/dataset/LLaVA-Pretrain"
+  },
+  "llava_instruct": {
+    "file_name": "/data3/DB/dataset/LLaVA-Instruct-150K/llava_instruct_llamafactory.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "messages",
+      "images": "images"
+    },
+    "tags": {
+      "role_tag": "role",
+      "content_tag": "content",
+      "user_tag": "user",
+      "assistant_tag": "assistant"
+    },
+    "media_dir": "/data3/DB/dataset/SpatialMQA/coco2017"
+  }
+}

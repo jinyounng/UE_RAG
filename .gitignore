@@ -1,0 +1,7 @@
+LLaMA-Factory/saves
+.idea/
+dataset_preprocessing/
+feasability/
+LLaVA/checkpoints/
+DenseConnector_llava/checkpoints/
+Encoder_RAG/checkpoints/
