@@ -1,0 +1,4 @@
+  0%|                                                                                 | 0/2180 [00:00<?, ?it/s]/data3/jykim/anaconda3/envs/dc/lib/python3.10/site-packages/torch/utils/checkpoint.py:31: UserWarning: None of the inputs have requires_grad=True. Gradients will be None
+  warnings.warn("None of the inputs have requires_grad=True. Gradients will be None")
+  0%|                                                                      | 1/2180 [00:22<13:19:24, 22.01s/it]
+{'loss': 8.9919, 'learning_rate': 1.5151515151515153e-05, 'epoch': 0.0}
