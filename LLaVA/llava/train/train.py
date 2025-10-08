@@ -80,6 +80,24 @@ class ModelArguments:
     mm_use_im_patch_token: bool = field(default=True)
     mm_patch_merge_type: Optional[str] = field(default='flat')
     mm_vision_select_feature: Optional[str] = field(default="patch")
+    rag_top_k: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Number of vision layers to sample when RAG scoring is enabled."
+        },
+    )
+    rag_temperature: float = field(
+        default=1.0,
+        metadata={
+            "help": "Softmax temperature applied when sampling RAG layers."
+        },
+    )
+    rag_pool_mode: str = field(
+        default='cls_first',
+        metadata={
+            "help": "Pooling mode for RAG vision features."
+        },
+    )
 
 
 @dataclass
@@ -856,6 +874,9 @@ def train(attn_implementation=None):
             **bnb_model_from_pretrained_args
         )
     model.config.use_cache = False
+    model.config.rag_top_k = getattr(model_args, "rag_top_k", None)
+    model.config.rag_temperature = getattr(model_args, "rag_temperature", 1.0)
+    model.config.rag_pool_mode = getattr(model_args, "rag_pool_mode", None)
 
     if model_args.freeze_backbone:
         model.model.requires_grad_(False)
